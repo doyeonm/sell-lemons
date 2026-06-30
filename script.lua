@@ -1,5 +1,8 @@
 if _G.MatchaCleanup then pcall(_G.MatchaCleanup) end
-if _G.SellLemonsConnection then pcall(function() _G.SellLemonsConnection:Disconnect() end) _G.SellLemonsConnection = nil end
+if _G.SellLemonsConnection then
+    pcall(function() _G.SellLemonsConnection:Disconnect() end)
+    _G.SellLemonsConnection = nil
+end
 local ScriptActive = true
 _G.SellLemonsActive = true
 local mfloor, mabs = math.floor, math.abs
@@ -13,21 +16,30 @@ local sformat = string.format
 local Vec2, Vec3 = Vector2.new, Vector3.new
 local CF = CFrame.new
 local C3rgb = Color3.fromRGB
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local player = Players.LocalPlayer
-local camera = workspace.CurrentCamera
+local Players, RunService, player, camera
 local initAttempts = 0
 while not player and initAttempts < 50 do
     initAttempts = initAttempts + 1
-    pcall_(function() player = Players.LocalPlayer; if player then camera = workspace.CurrentCamera end end)
+    pcall_(function()
+        Players = game:GetService("Players")
+        RunService = game:GetService("RunService")
+        player = Players.LocalPlayer
+        if player then camera = workspace.CurrentCamera end
+    end)
     if not player then task_wait(0.1) end
 end
 if not player then return end
 if not camera then camera = workspace.CurrentCamera end
 local playerGui = player:WaitForChild("PlayerGui")
+local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
 pcall_(function() setrobloxinput(true) end)
+
+player.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
 local mouse = nil
 pcall_(function() mouse = player:GetMouse() end)
 local errCounts = {}
@@ -54,14 +66,15 @@ local autoStandActive = false
 local _standIsTapping = false
 local _isBuying = false
 local _lemonZoomedIn = false
+local _lemonWasActive = false
 local myTycoon = nil
 local UIRef = { win = nil, t = {} }
 local S = { pmx = 0, pmy = 0, keyDown = {}, lastFire = {} }
-local function _windowFocused()
-    if type(isrbxactive) ~= "function" then return true end
-    local ok, r = pcall_(isrbxactive)
-    if not ok then return true end
-    return r ~= false
+local function UXfire(id)
+    local now = tick_()
+    if S.lastFire[id] and (now - S.lastFire[id]) < 0.30 then return false end
+    S.lastFire[id] = now
+    return true
 end
 local function findMyTycoon()
     local pname = player.Name
@@ -85,6 +98,10 @@ local function getButtonKey(v)
     local pos = v.Position
     if not pos then return nil end
     return sformat("%d,%d,%d", mfloor(pos.X+0.5), mfloor(pos.Y+0.5), mfloor(pos.Z+0.5))
+end
+local function resetBuyBlacklist()
+    tempBlacklist = {}
+    blacklistTime = {}
 end
 local function normalizeColor(c)
     local r, g, b = c.R, c.G, c.B
@@ -206,19 +223,301 @@ local function _anyLiveButtons()
     end
     return false
 end
+local lemonTrees = {}
+local lemonTreeSet = {}
+local lemonTreeCacheReady = false
+local function _removeTree(tree)
+    if not lemonTreeSet[tree] then return end
+    lemonTreeSet[tree] = nil
+    for i = #lemonTrees, 1, -1 do
+        if lemonTrees[i] == tree then table.remove(lemonTrees, i); break end
+    end
+end
+local function addLemonTree(tree)
+    if not tree or lemonTreeSet[tree] then return end
+    lemonTreeSet[tree] = true
+    tinsert(lemonTrees, tree)
+    pcall_(function()
+        tree.AncestryChanged:Connect(function(_, parent)
+            if not parent then _removeTree(tree) end
+        end)
+    end)
+end
+local function hookTreesFolder(treesFolder)
+    if not treesFolder then return end
+    for _, t in ipairs_(treesFolder:GetChildren()) do addLemonTree(t) end
+    pcall_(function()
+        treesFolder.ChildAdded:Connect(function(newTree) addLemonTree(newTree) end)
+    end)
+end
+local function hookTycoonForTrees(tycoon)
+    if not tycoon or not tycoon.Name then return end
+    if not tycoon.Name:find("Tycoon") then return end
+    local constant = tycoon:FindFirstChild("Constant")
+    if constant then
+        local trees = constant:FindFirstChild("Trees")
+        if trees then hookTreesFolder(trees) end
+        pcall_(function()
+            constant.ChildAdded:Connect(function(child)
+                if child.Name == "Trees" then hookTreesFolder(child) end
+            end)
+        end)
+    end
+    pcall_(function()
+        tycoon.ChildAdded:Connect(function(child)
+            if child.Name == "Constant" then
+                local trees = child:FindFirstChild("Trees")
+                if trees then hookTreesFolder(trees) end
+                pcall_(function()
+                    child.ChildAdded:Connect(function(c2)
+                        if c2.Name == "Trees" then hookTreesFolder(c2) end
+                    end)
+                end)
+            end
+        end)
+    end)
+end
+local function buildLemonTreeCache()
+    lemonTrees, lemonTreeSet = {}, {}
+    local rootLT = workspace:FindFirstChild("LemonTree")
+    if rootLT then addLemonTree(rootLT) end
+    pcall_(function()
+        workspace.ChildAdded:Connect(function(child)
+            if child.Name == "LemonTree" then addLemonTree(child)
+            elseif child.Name and child.Name:find("Tycoon") then hookTycoonForTrees(child) end
+        end)
+    end)
+    for _, tycoon in ipairs_(workspace:GetChildren()) do hookTycoonForTrees(tycoon) end
+    lemonTreeCacheReady = true
+end
+buildLemonTreeCache()
+local LEMON_MAX_FRUIT_HEIGHT = 14
+local function getLemonsFast()
+    if not lemonTreeCacheReady then buildLemonTreeCache() end
+    local temp = {}
+    for ti = 1, #lemonTrees do
+        local tree = lemonTrees[ti]
+        if tree and tree.Parent then
+            for _, fruit in ipairs_(tree:GetChildren()) do
+                if fruit.Name == "Fruit" then
+                    local cp = fruit:FindFirstChild("ClickPart")
+                    if cp and cp:IsA("BasePart") and cp.Position.Y <= LEMON_MAX_FRUIT_HEIGHT then
+                        tinsert(temp, cp)
+                    end
+                end
+            end
+        end
+    end
+    return temp
+end
+local function getCashDropsFast()
+    local folder = workspace:FindFirstChild("CashDrops")
+    if not folder then return {} end
+    local temp = {}
+    for _, v in ipairs_(folder:GetDescendants()) do
+        if v.Name == "TouchInterest" and v.Parent and v.Parent:IsA("BasePart") then
+            tinsert(temp, v.Parent)
+        end
+    end
+    return temp
+end
+local LSM = { mode = nil, standBusyT = 0, lastBot = 0 }
+local function lemonGone(v)
+    return not (v and v.Parent and v:IsDescendantOf(workspace))
+end
+local function findClickDetector(v)
+    local cd
+    pcall_(function() cd = v:FindFirstChildOfClass("ClickDetector") end)
+    if cd then return cd end
+    pcall_(function()
+        local par = v.Parent
+        if par then
+            cd = par:FindFirstChildOfClass("ClickDetector")
+            if not cd then
+                for _, d in ipairs_(par:GetDescendants()) do
+                    if d:IsA("ClickDetector") then cd = d; break end
+                end
+            end
+        end
+    end)
+    return cd
+end
+local function lsmSilent(v)
+    local cd = findClickDetector(v)
+    if not cd then return false end
+    if (LSM.mode == nil or LSM.mode == "cd") and type(fireclickdetector) == "function" then
+        local ok = pcall_(fireclickdetector, cd)
+        if ok then
+            task_wait(0.12)
+            if lemonGone(v) then
+                if LSM.mode == nil then LSM.mode = "cd" end
+                return true
+            end
+        end
+    end
+    if (LSM.mode == nil or LSM.mode == "sig") and type(firesignal) == "function" then
+        local ok = pcall_(function() firesignal(cd.MouseClick, player) end)
+        if ok then
+            task_wait(0.12)
+            if lemonGone(v) then
+                if LSM.mode == nil then LSM.mode = "sig" end
+                return true
+            end
+        end
+    end
+    return false
+end
+local function lsmTouch(v, hrp)
+    if not hrp then return false end
+    local vp = v.Position
+    pcall_(function() hrp.CFrame = CF(vp.X, vp.Y, vp.Z) end)
+    task_wait(0.12)
+    if lemonGone(v) then
+        if LSM.mode == nil then LSM.mode = "touch" end
+        return true
+    end
+    return false
+end
+local function lsmZoom(dir)
+    if LSM.mode == "cd" or LSM.mode == "sig" then return end
+    if type(mousescroll) == "function" then
+        for _ = 1, CFG.zoomTicks do
+            pcall_(mousescroll, CFG.zoomStep * dir)
+            task_wait(0.02)
+        end
+    end
+end
+local function disableTreeCanQuery(tree, excludeSet)
+    local modified, n = {}, 0
+    for _, part in ipairs_(tree:GetDescendants()) do
+        if part:IsA("BasePart") and not excludeSet[part] then
+            pcall_(function()
+                if part.CanQuery then
+                    part.CanQuery = false
+                    n = n + 1
+                    modified[n] = part
+                end
+            end)
+        end
+    end
+    return modified, n
+end
+local function restoreTreeCanQuery(modified, n)
+    for i = 1, n do pcall_(function() modified[i].CanQuery = true end) end
+end
+local function findTreeOf(clickPart)
+    local n = clickPart.Parent
+    if n then return n.Parent end
+    return nil
+end
+local LEMON_HITBOX_SIZE = Vec3(50, 50, 50)
+local LEMON_TP_WAIT = 0.008
+local LEMON_CAM_WAIT = 0.008
+local LEMON_CLICK_GAP = 0.005
+local LEMON_POST_WAIT = 0
+local LEMON_DOUBLE_CLICK = true
+local lemonFailCount = {}
+local LEMON_MAX_FAILS = 3
+local function lemonKey(v)
+    local pos = v.Position
+    return mfloor(pos.X+0.5)..","..mfloor(pos.Y+0.5)..","..mfloor(pos.Z+0.5)
+end
+local function processLemon(v, hrp)
+    if not v or not v:IsDescendantOf(workspace) then return false end
+    if autoStandActive and (tick_() - LSM.standBusyT) < 4 then return false end
+    if LSM.mode ~= "classic" then
+        if lsmSilent(v) then return true end
+        if LSM.mode == "cd" or LSM.mode == "sig" then return false end
+        if lsmTouch(v, hrp) then return true end
+        if LSM.mode == "touch" then return false end
+        if LSM.mode == nil then LSM.mode = "classic" end
+    end
+    local origSize, origTransp, origCanColl
+    pcall_(function()
+        origSize = v.Size
+        origTransp = v.Transparency
+        origCanColl = v.CanCollide
+        v.CanCollide = false
+        v.Transparency = 1
+        v.Size = LEMON_HITBOX_SIZE
+    end)
+    local vp = v.Position
+    local tpX, tpY, tpZ = vp.X, vp.Y - 4, vp.Z
+    LSM.lastBot = tick_()
+    pcall_(function()
+        hrp.CFrame = CF(tpX, tpY, tpZ)
+        task_wait(LEMON_TP_WAIT)
+        camera.CFrame = CFrame.lookAt(Vec3(tpX, tpY, tpZ), Vec3(vp.X, vp.Y + 10, vp.Z))
+        task_wait(LEMON_CAM_WAIT)
+        local vps = camera.ViewportSize
+        mousemoveabs(mfloor(vps.X / 2), mfloor(vps.Y / 2))
+        mouse1click()
+        if LEMON_DOUBLE_CLICK then task_wait(LEMON_CLICK_GAP); mouse1click() end
+    end)
+    local collected = lemonGone(v)
+    if not collected then
+        pcall_(function()
+            if origSize ~= nil then v.Size = origSize end
+            if origTransp ~= nil then v.Transparency = origTransp end
+            if origCanColl ~= nil then v.CanCollide = origCanColl end
+        end)
+    end
+    if LEMON_POST_WAIT > 0 then task_wait(LEMON_POST_WAIT) end
+    return collected
+end
+local function processSnapshot(snapshot, hrp)
+    local groups, groupOrder = {}, {}
+    for i = 1, #snapshot do
+        local v = snapshot[i]
+        if v and v.Parent and v:IsDescendantOf(workspace) then
+            local tree = findTreeOf(v)
+            local key = (tree and tree.Parent and tree) or v.Parent
+            if key then
+                local g = groups[key]
+                if not g then g = {}; groups[key] = g; tinsert(groupOrder, key) end
+                tinsert(g, v)
+            end
+        end
+    end
+    local collectedCount = 0
+    for _, tree in ipairs_(groupOrder) do
+        if not lemonFarmActive then break end
+        if _isBuying then break end
+        if autoStandActive and (tick_() - LSM.standBusyT) < 4 then break end
+        local fruits = groups[tree]
+        local excludeSet = {}
+        for i = 1, #fruits do excludeSet[fruits[i]] = true end
+        local modified, modN = {}, 0
+        if tree and LSM.mode ~= "cd" and LSM.mode ~= "sig" then
+            modified, modN = disableTreeCanQuery(tree, excludeSet)
+        end
+        for i = 1, #fruits do
+            if not lemonFarmActive then break end
+            local v = fruits[i]
+            if v and v:IsDescendantOf(workspace) then
+                local lk = lemonKey(v)
+                local fails = lemonFailCount[lk] or 0
+                if fails < LEMON_MAX_FAILS then
+                    local ok = processLemon(v, hrp)
+                    if ok then lemonFailCount[lk] = nil; collectedCount = collectedCount + 1
+                    else lemonFailCount[lk] = fails + 1 end
+                end
+            end
+        end
+        if modN > 0 then restoreTreeCanQuery(modified, modN) end
+    end
+    return collectedCount
+end
 _wrap("cash-farm", function()
     while ScriptActive do
         local character = player.Character
         local head = character and character:FindFirstChild("Head")
         if head then
-            local drops = workspace:FindFirstChild("CashDrops")
-            if drops then
-                local headPos = head.Position
-                for _, v in ipairs_(drops:GetDescendants()) do
-                    if v.Name == "TouchInterest" and v.Parent and v.Parent:IsA("BasePart") then
-                        pcall_(function() v.Parent.Position = headPos end)
-                    end
-                end
+            local snapshot = getCashDropsFast()
+            local headPos = head.Position
+            for i = 1, #snapshot do
+                local p = snapshot[i]
+                if p and p.Parent then pcall_(function() p.Position = headPos end) end
             end
             task_wait(0.3)
         else
@@ -228,10 +527,10 @@ _wrap("cash-farm", function()
 end)
 local homesick
 do
-    pcall_(function()
+    local ok, err = pcall_(function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/sharedechoes/Matcha-Luas/refs/heads/main/homesick.lua"))()
-        homesick = _G.homesick or shared.homesick
     end)
+    homesick = _G.homesick or shared.homesick
 end
 if homesick then
     pcall_(function() homesick.changelogEnabled = false end)
@@ -323,194 +622,25 @@ _wrap("autobuy-worker", function()
         end
     end
 end)
-local lemonTrees = {}
-local lemonTreeSet = {}
-local lemonTreeCacheReady = false
-local function addLemonTree(tree)
-    if not tree or lemonTreeSet[tree] then return end
-    lemonTreeSet[tree] = true
-    tinsert(lemonTrees, tree)
-end
-local function buildLemonTreeCache()
-    lemonTrees, lemonTreeSet = {}, {}
-    local rootLT = workspace:FindFirstChild("LemonTree")
-    if rootLT then addLemonTree(rootLT) end
-    for _, tycoon in ipairs_(workspace:GetChildren()) do 
-        if tycoon.Name:find("Tycoon") then
-            local constant = tycoon:FindFirstChild("Constant")
-            if constant then
-                local trees = constant:FindFirstChild("Trees")
-                if trees then 
-                    for _, t in ipairs_(trees:GetChildren()) do addLemonTree(t) end
-                end
-            end
-        end
-    end
-    lemonTreeCacheReady = true
-end
-buildLemonTreeCache()
-local LEMON_MAX_FRUIT_HEIGHT = 14
-local function getLemonsFast()
-    if not lemonTreeCacheReady then buildLemonTreeCache() end
-    local temp = {}
-    for ti = 1, #lemonTrees do
-        local tree = lemonTrees[ti]
-        if tree and tree.Parent then
-            for _, fruit in ipairs_(tree:GetChildren()) do
-                if fruit.Name == "Fruit" then
-                    local cp = fruit:FindFirstChild("ClickPart")
-                    if cp and cp:IsA("BasePart") and cp.Position.Y <= LEMON_MAX_FRUIT_HEIGHT then
-                        tinsert(temp, cp)
-                    end
-                end
-            end
-        end
-    end
-    return temp
-end
-local LSM = { mode = nil, standBusyT = 0, lastBot = 0 }
-local function lemonGone(v)
-    return not (v and v.Parent and v:IsDescendantOf(workspace))
-end
-local function lsmSilent(v)
-    local cd
-    pcall_(function() cd = v:FindFirstChildOfClass("ClickDetector") end)
-    if not cd then return false end
-    if type(fireclickdetector) == "function" then
-        local ok = pcall_(fireclickdetector, cd)
-        if ok then
-            task_wait(0.12)
-            if lemonGone(v) then return true end
-        end
-    end
-    if type(firesignal) == "function" then
-        local ok = pcall_(function() firesignal(cd.MouseClick, player) end)
-        if ok then
-            task_wait(0.12)
-            if lemonGone(v) then return true end
-        end
-    end
-    return false
-end
-local function lsmTouch(v, hrp)
-    if not hrp then return false end
-    pcall_(function() hrp.CFrame = CF(v.Position.X, v.Position.Y, v.Position.Z) end)
-    task_wait(0.12)
-    if lemonGone(v) then return true end
-    return false
-end
-local function lsmZoom(dir)
-    if LSM.mode == "cd" or LSM.mode == "sig" then return end
-    if type(mousescroll) == "function" then
-        for _ = 1, CFG.zoomTicks do pcall_(mousescroll, CFG.zoomStep * dir); task_wait(0.02) end
-    end
-end
-local function disableTreeCanQuery(tree, excludeSet)
-    local modified, n = {}, 0
-    for _, part in ipairs_(tree:GetDescendants()) do
-        if part:IsA("BasePart") and not excludeSet[part] then
-            pcall_(function()
-                if part.CanQuery then
-                    part.CanQuery = false
-                    n = n + 1
-                    modified[n] = part
-                end
-            end)
-        end
-    end
-    return modified, n
-end
-local function restoreTreeCanQuery(modified, n)
-    for i = 1, n do pcall_(function() modified[i].CanQuery = true end) end
-end
-local function findTreeOf(clickPart)
-    local n = clickPart.Parent
-    if n then return n.Parent end
-    return nil
-end
-local LEMON_HITBOX_SIZE = Vec3(50, 50, 50)
-local lemonFailCount = {}
-local function processLemon(v, hrp)
-    if not v or not v:IsDescendantOf(workspace) then return false end
-    if not _windowFocused() then return false end
-    if autoStandActive and (tick_() - (LSM.standBusyT or 0)) < 4 then return false end
-    if lsmSilent(v) then return true end
-    if lsmTouch(v, hrp) then return true end
-    local origSize = v.Size
-    pcall_(function() v.CanCollide = false; v.Transparency = 1; v.Size = LEMON_HITBOX_SIZE end)
-    local vp = v.Position
-    local tpX, tpY, tpZ = vp.X, vp.Y - 4, vp.Z
-    pcall_(function()
-        hrp.CFrame = CF(tpX, tpY, tpZ)
-        task_wait(0.008)
-        camera.CFrame = CFrame.lookAt(Vec3(tpX, tpY, tpZ), Vec3(vp.X, vp.Y + 10, vp.Z))
-        task_wait(0.008)
-        local vps = camera.ViewportSize
-        if type(mousemoveabs) == "function" and type(mouse1click) == "function" then
-            mousemoveabs(mfloor(vps.X / 2), mfloor(vps.Y / 2))
-            mouse1click()
-            task_wait(0.005); mouse1click()
-        end
-    end)
-    local collected = lemonGone(v)
-    if not collected then pcall_(function() v.Size = origSize end) end
-    return collected
-end
-local function processSnapshot(snapshot, hrp)
-    local groups, groupOrder = {}, {}
-    for i = 1, #snapshot do
-        local v = snapshot[i]
-        if v and v.Parent and v:IsDescendantOf(workspace) then
-            local tree = findTreeOf(v)
-            local key = (tree and tree.Parent and tree) or v.Parent
-            if key then
-                local g = groups[key]
-                if not g then g = {}; groups[key] = g; tinsert(groupOrder, key) end
-                tinsert(g, v)
-            end
-        end
-    end
-    local collectedCount = 0
-    for _, tree in ipairs_(groupOrder) do
-        if not lemonFarmActive or _isBuying or (autoStandActive and (tick_() - (LSM.standBusyT or 0)) < 4) then break end
-        local fruits = groups[tree]
-        local excludeSet = {}
-        for i = 1, #fruits do excludeSet[fruits[i]] = true end
-        local modified, modN = disableTreeCanQuery(tree, excludeSet)
-        for i = 1, #fruits do
-            if not lemonFarmActive or _isBuying then break end
-            local v = fruits[i]
-            if v and v:IsDescendantOf(workspace) then
-                local lk = getButtonKey(v) or tostring_(i)
-                local fails = lemonFailCount[lk] or 0
-                if fails < 3 then
-                    local ok = processLemon(v, hrp)
-                    if ok then lemonFailCount[lk] = nil; collectedCount = collectedCount + 1
-                    else lemonFailCount[lk] = fails + 1 end
-                end
-            end
-        end
-        if modN > 0 then restoreTreeCanQuery(modified, modN) end
-    end
-    return collectedCount
-end
 _wrap("lemon-farm", function()
     local LEMON_MAX_PASSES = 6
     local LEMON_VERIFY_WAIT = 0.15
     local LEMON_VERIFY_PASSES = 3
     local LEMON_PASS_WAIT = 0.04
     while ScriptActive do
-        if not lemonFarmActive then
-            if _lemonZoomedIn then lsmZoom(-1); _lemonZoomedIn = false end
-            task_wait(0.1)
-            continue
-        end
         local character = player.Character
         local hrp = character and character:FindFirstChild("HumanoidRootPart")
         local buyBusy = _isBuying
-        local standBusy = autoStandActive and (tick_() - (LSM.standBusyT or 0)) < 4
-        if hrp and not buyBusy and not standBusy then
-            if not _lemonZoomedIn then lsmZoom(1); _lemonZoomedIn = true end
+        local standBusy = autoStandActive and (tick_() - LSM.standBusyT) < 4
+        if not lemonFarmActive and _lemonZoomedIn then
+            lsmZoom(-1)
+            _lemonZoomedIn = false
+        end
+        if lemonFarmActive and hrp and not buyBusy and not standBusy then
+            if not _lemonZoomedIn then
+                lsmZoom(1)
+                _lemonZoomedIn = true
+            end
             local pass, lastSeen, sameStreak = 0, -1, 0
             while ScriptActive and lemonFarmActive and pass < LEMON_MAX_PASSES do
                 pass = pass + 1
@@ -547,8 +677,9 @@ local STAND_E_DURATION = 1.5
 local STAND_E_INTERVAL = 0.015
 local STAND_LOOP_DELAY = 0.1
 _wrap("auto-stand", function()
+    local firstRun = true
     while ScriptActive do
-        if not autoStandActive then task_wait(0.25); continue end
+        if not autoStandActive then firstRun = true; task_wait(0.25); continue end
         if not myTycoon or not myTycoon.Parent then
             myTycoon = findMyTycoon()
             task_wait(0.5); continue
@@ -611,17 +742,7 @@ local rsConn = RunService.RenderStepped:Connect(function()
         local hrp = chr and chr:FindFirstChild("HumanoidRootPart")
         if hrp then pcall_(function() hrp.AssemblyLinearVelocity = Vec3(0, 2, 0) end) end
     end
-    local focused = _windowFocused()
-    local nowA = tick_()
-    if focused then
-        local mx, my = S.pmx, S.pmy
-        if mouse then pcall_(function() mx = mouse.X; my = mouse.Y end) end
-        local m1 = false; pcall_(function() m1 = ismouse1pressed() end)
-        if (nowA - LSM.lastBot) > 0.35 then
-            if mx ~= S.pmx or my ~= S.pmy or m1 then end
-        end
-        S.pmx, S.pmy = mx, my
-    end
+    _lemonWasActive = lemonFarmActive
 end)
 _G.MatchaCleanup = function()
     ScriptActive = false
