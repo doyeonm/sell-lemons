@@ -1,4 +1,4 @@
--- [[ stop skidding its ai slop]] --
+-- [[ Sell Lemons Ultimate - Simple Pastel UI & Auto Cash ]] --
 if _G.MatchaCleanup then pcall(_G.MatchaCleanup) end
 if _G.SellLemonsConnection then
     pcall(function() _G.SellLemonsConnection:Disconnect() end)
@@ -38,6 +38,7 @@ if not player then warn("[SellLemons] No LocalPlayer"); return end
 if not camera then camera = workspace.CurrentCamera end
 
 local playerGui = player:WaitForChild("PlayerGui")
+local UserInputService = game:GetService("UserInputService")
 setrobloxinput(true)
 
 local mouse = nil
@@ -81,7 +82,6 @@ local CFG = {
 local autoBuyActive   = false
 local buyDecosActive  = false 
 local lemonFarmActive = false
-local cashFarmActive  = false
 local autoStandActive = false
 local _standIsTapping = false
 
@@ -89,16 +89,7 @@ local _lemonZoomedIn  = false
 local _lemonWasActive = false
 
 local myTycoon = nil
-
-local UIRef = { win = nil, t = {} }
-
 local S = { pmx = 0, pmy = 0, keyDown = {}, lastFire = {} }
-local function UXfire(id)
-    local now = tick_()
-    if S.lastFire[id] and (now - S.lastFire[id]) < 0.30 then return false end
-    S.lastFire[id] = now
-    return true
-end
 
 -- ==================== WINDOW FOCUS GUARD ====================
 local function _windowFocused()
@@ -199,12 +190,10 @@ local function isGreyedOut(v)
     return mabs(r-g) < 30 and mabs(g-b) < 30 and mabs(r-b) < 30 and r < 200
 end
 
--- [FIXED] 데코레이션 다이내믹 필터
 local decoNameCache = {}
 local function isDecoration(btn)
     if not btn then return false end
     
-    -- 1. 이름은 변하지 않으므로 캐싱하여 렉 최소화
     local cachedNameResult = decoNameCache[btn]
     if cachedNameResult == nil then
         local isDecoName = false
@@ -226,11 +215,9 @@ local function isDecoration(btn)
 
     if cachedNameResult then return true end
 
-    -- 2. 색상은 회색 <-> 빨간색 등 실시간으로 변하므로 매번 체크
     local ok3, color3 = pcall_(function() return btn.Color end)
     if ok3 and color3 then
         local r, g, b = normalizeColor(color3)
-        -- 돈이 충분해져서 붉게 변했을 때만 데코로 인식
         if r > 150 and g < 70 and b < 70 then
             return true
         end
@@ -987,7 +974,6 @@ local totalFailed   = 0
 local lastResetTime = 0
 local emptyStreak   = 0
 
--- [FIXED] 불필요한 queueLock 완전 제거. 단일 스레드 안전성 보장
 local function appendNewButtons()
     if not myTycoon or not myTycoon.Parent then return 0 end
 
@@ -1022,99 +1008,140 @@ local function cleanupQueue()
     end
 end
 
--- ==================== STATUS HUD (Drawing) ====================
-local drawObjs = {}
-local function D(typ, props)
-    local obj = Drawing.new(typ)
-    for k, v in pairs_(props) do pcall_(function() obj[k] = v end) end
-    tinsert(drawObjs, obj)
-    return obj
-end
-
-local statusFarm  = D("Text", {Text="", FontSize=14, Size=14, Center=true, Outline=true, Visible=false, ZIndex=5, Color=C3rgb(255,214,60)})
-local statusStand = D("Text", {Text="", FontSize=13, Size=13, Center=true, Outline=true, Visible=false, ZIndex=5, Color=C3rgb(180,230,150)})
-
-local LSM_standNextT = 0
-
--- ==================== LOAD UI ====================
-local homesick
-do
-    local ok, err = pcall_(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/sharedechoes/Matcha-Luas/refs/heads/main/homesick.lua"))()
-    end)
-    homesick = _G.homesick or shared.homesick
-    if not homesick then rprint("[SellLemons] homesick failed to load: " .. tostring_(err)) end
-end
-
-if homesick then
-    pcall_(function() homesick.changelogEnabled = false end)
-    local window = homesick.createWindow("sell lemons", 420, 400)
-    pcall_(function() window:autoloadConfig("selllemons_config") end)
-    pcall_(function() window:autoloadTheme("theme") end)
-    UIRef.win = window
-
-    local tab1 = window:addTab("automation")
-    local left = tab1:addSection("automation", "Left")
-
-    UIRef.t.AutoBuy = left:addToggle("autoBuy", "auto buy", false, function(val)
-        task_spawn(function()
-            autoBuyActive = val
-        end)
-    end):addKeybind("1", "Toggle", true)
-
-    UIRef.t.LemonFarm = left:addToggle("lemonFarm", "lemon farm", false, function(val)
-        task_spawn(function()
-            lemonFarmActive = val
-            if not val then lsmZoom(-1) end
-        end)
-    end):addKeybind("2", "Toggle", true)
-
-    UIRef.t.AutoStand = left:addToggle("autoStand", "auto stand", false, function(val)
-        task_spawn(function()
-            autoStandActive = val
-        end)
-    end):addKeybind("3", "Toggle", true)
-
-    UIRef.t.CashFarm = left:addToggle("cashFarm", "cash farm", false, function(val)
-        task_spawn(function()
-            cashFarmActive = val
-        end)
-    end):addKeybind("4", "Toggle", true)
-
-    local right = tab1:addSection("other", "Right")
-
-    UIRef.t.StopAll = right:addToggle("stopAll", "stop all", false, function(val)
-        task_spawn(function()
-            if val then
-                autoBuyActive = false; lemonFarmActive = false
-                cashFarmActive = false; autoStandActive = false;
-                resetBuyBlacklist()
-                lsmZoom(-1)
-                pcall_(function() UIRef.t.AutoBuy:SetValue(false)   end)
-                pcall_(function() UIRef.t.BuyDecos:SetValue(false)  end)
-                pcall_(function() UIRef.t.LemonFarm:SetValue(false) end)
-                pcall_(function() UIRef.t.AutoStand:SetValue(false) end)
-                pcall_(function() UIRef.t.CashFarm:SetValue(false)  end)
-                task.delay(0.1, function()
-                    pcall_(function() UIRef.t.StopAll:SetValue(false) end)
-                end)
+-- ==================== AUTO CASH FARM (항시 작동) ====================
+_wrap("cash-farm", function()
+    while ScriptActive do
+        local character = player.Character
+        local head = character and character:FindFirstChild("Head")
+        if head then
+            local snapshot = getCashDropsFast()
+            local headPos = head.Position
+            for i = 1, #snapshot do
+                local p = snapshot[i]
+                if p and p.Parent then pcall_(function() p.Position = headPos end) end
             end
-        end)
-    end):addKeybind("9", "Toggle", true)
+            task_wait(0.3)
+        else
+            task_wait(0.2)
+        end
+    end
+end)
 
-    UIRef.t.BuyDecos = right:addToggle("buyDecos", "Buy Decos", false, function(val)
-        task_spawn(function()
-            buyDecosActive = val
-            resetBuyBlacklist()
-            localQueue = {}
-            queueIndex = 1
-        end)
-    end)
+-- ==================== SIMPLE NATIVE UI ====================
+local guiName = "SellLemonsSimpleUI"
+local coreGui = game:GetService("CoreGui")
+local guiParent = player:WaitForChild("PlayerGui")
 
-    window.visible = true
-    window:render()
-    rprint("[SellLemons] UI loaded successfully")
+-- Try to find best GUI parent securely
+pcall_(function()
+    if type(gethui) == "function" then guiParent = gethui()
+    elseif coreGui then guiParent = coreGui end
+end)
+
+-- Clean old GUI
+for _, v in ipairs_(guiParent:GetChildren()) do
+    if v.Name == guiName then pcall_(function() v:Destroy() end) end
 end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = guiName
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = guiParent
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 220, 0, 250)
+MainFrame.Position = UDim2.new(0.5, -110, 0.5, -125)
+MainFrame.BackgroundColor3 = C3rgb(190, 225, 245) -- 파스텔 하늘색
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.BackgroundTransparency = 1
+Title.Text = "🍋 Sell Lemons"
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 18
+Title.TextColor3 = C3rgb(60, 80, 100)
+Title.Parent = MainFrame
+
+local Hint = Instance.new("TextLabel")
+Hint.Size = UDim2.new(1, 0, 0, 15)
+Hint.Position = UDim2.new(0, 0, 0, 30)
+Hint.BackgroundTransparency = 1
+Hint.Text = "[ Q ] 키로 숨기기"
+Hint.Font = Enum.Font.Gotham
+Hint.TextSize = 10
+Hint.TextColor3 = C3rgb(100, 120, 140)
+Hint.Parent = MainFrame
+
+local Container = Instance.new("Frame")
+Container.Size = UDim2.new(1, 0, 1, -50)
+Container.Position = UDim2.new(0, 0, 0, 50)
+Container.BackgroundTransparency = 1
+Container.Parent = MainFrame
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Padding = UDim.new(0, 8)
+UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+UIListLayout.Parent = Container
+
+local function createToggle(name, text, defaultState)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.85, 0, 0, 35)
+    
+    local colorOn = C3rgb(160, 220, 170)
+    local colorOff = C3rgb(250, 250, 250)
+    
+    btn.BackgroundColor3 = defaultState and colorOn or colorOff
+    btn.Text = text .. (defaultState and " [ON]" or " [OFF]")
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 13
+    btn.TextColor3 = C3rgb(60, 60, 60)
+    btn.Parent = Container
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = btn
+
+    btn.MouseButton1Click:Connect(function()
+        if name == "AutoBuy" then 
+            autoBuyActive = not autoBuyActive; 
+            btn.BackgroundColor3 = autoBuyActive and colorOn or colorOff; 
+            btn.Text = text .. (autoBuyActive and " [ON]" or " [OFF]")
+        elseif name == "BuyDecos" then 
+            buyDecosActive = not buyDecosActive; 
+            resetBuyBlacklist(); 
+            btn.BackgroundColor3 = buyDecosActive and colorOn or colorOff; 
+            btn.Text = text .. (buyDecosActive and " [ON]" or " [OFF]")
+        elseif name == "LemonFarm" then 
+            lemonFarmActive = not lemonFarmActive; 
+            btn.BackgroundColor3 = lemonFarmActive and colorOn or colorOff; 
+            btn.Text = text .. (lemonFarmActive and " [ON]" or " [OFF]")
+        elseif name == "AutoStand" then 
+            autoStandActive = not autoStandActive; 
+            btn.BackgroundColor3 = autoStandActive and colorOn or colorOff; 
+            btn.Text = text .. (autoStandActive and " [ON]" or " [OFF]")
+        end
+    end)
+end
+
+createToggle("AutoBuy", "Auto Buy", false)
+createToggle("BuyDecos", "Buy Decos (데코 구매)", false)
+createToggle("LemonFarm", "Lemon Farm", false)
+createToggle("AutoStand", "Auto Stand", false)
+
+-- Q 키로 UI 토글
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.Q then
+        MainFrame.Visible = not MainFrame.Visible
+    end
+end)
 
 -- ==================== AUTO BUY WORKER ====================
 _wrap("autobuy-worker", function()
@@ -1127,7 +1154,7 @@ _wrap("autobuy-worker", function()
 
         local item = nil
         while queueIndex <= #localQueue do
-            if not autoBuyActive then break end
+            if not autoBuyActive then break end 
             local candidate = localQueue[queueIndex]
             queueIndex = queueIndex + 1
             if candidate and candidate.btn and candidate.btn.Parent then
@@ -1145,7 +1172,7 @@ _wrap("autobuy-worker", function()
                 if added > 0 then
                     emptyStreak = 0
                     while queueIndex <= #localQueue do
-                        if not autoBuyActive then break end
+                        if not autoBuyActive then break end 
                         local candidate = localQueue[queueIndex]
                         queueIndex = queueIndex + 1
                         if candidate and candidate.btn and candidate.btn.Parent then
@@ -1245,7 +1272,7 @@ _wrap("autobuy-coord", function()
             myTycoon = findMyTycoon()
             if myTycoon then
                 resetBuyBlacklist(); 
-                localQueue = {}; queueIndex = 1
+                localQueue = {}; queueIndex = 1; 
             else
                 task_wait(0.5); continue
             end
@@ -1275,7 +1302,7 @@ _wrap("autobuy-coord", function()
                         if now - lastResetTime > 2 then
                             lastResetTime = now
                             resetBuyBlacklist();
-                            localQueue = {}; queueIndex = 1
+                            localQueue = {}; queueIndex = 1; 
                             appendNewButtons()
                         else task_wait(0.5) end
                     else task_wait(0.5) end
@@ -1347,26 +1374,6 @@ _wrap("lemon-farm", function()
     end
 end)
 
--- ==================== CASH FARM LOOP ====================
-_wrap("cash-farm", function()
-    while ScriptActive do
-        local character = player.Character
-        local head = character and character:FindFirstChild("Head")
-        if cashFarmActive and head then
-            local snapshot = getCashDropsFast()
-            local headPos = head.Position
-            for i = 1, #snapshot do
-                if not cashFarmActive then break end
-                local p = snapshot[i]
-                if p and p.Parent then pcall_(function() p.Position = headPos end) end
-            end
-            task_wait(0.3)
-        else
-            task_wait(0.2)
-        end
-    end
-end)
-
 -- ==================== AUTO STAND LOOP ====================
 _wrap("auto-stand", function()
     local firstRun = true
@@ -1419,40 +1426,6 @@ local rsConn = RunService.RenderStepped:Connect(function()
         end
         S.pmx, S.pmy = mx, my
     end
-
-    local vx = 960
-    pcall_(function() vx = camera.ViewportSize.X * 0.5 end)
-    local rowY = 8
-
-    if lemonFarmActive then
-        local txt
-        local qRem = #localQueue - queueIndex + 1
-        if autoBuyActive and qRem > 0 then
-            txt = "lemon farm  |  paused: auto buy working"
-        elseif autoStandActive and (nowA - LSM.standBusyT) < 4 then
-            txt = "lemon farm  |  paused: auto stand working"
-        else
-            txt = "lemon farm  |  FARMING"
-        end
-        statusFarm.Text = txt
-        statusFarm.Position = Vec2(vx, rowY)
-        statusFarm.Visible = true
-        rowY = rowY + 20
-    else statusFarm.Visible = false end
-
-    if autoStandActive then
-        local txt2
-        if (nowA - LSM.standBusyT) < 4 then
-            txt2 = "auto stand  |  upgrading..."
-        elseif LSM_standNextT and LSM_standNextT > nowA then
-            txt2 = sformat("auto stand  |  next pass in %ds", mfloor(LSM_standNextT - nowA) + 1)
-        else txt2 = "auto stand  |  ON" end
-        statusStand.Text = txt2
-        statusStand.Position = Vec2(vx, rowY)
-        statusStand.Visible = true
-        rowY = rowY + 20
-    else statusStand.Visible = false end
-
     _lemonWasActive = lemonFarmActive
 end)
 
@@ -1461,9 +1434,8 @@ _G.MatchaCleanup = function()
     ScriptActive = false
     _G.SellLemonsActive = false
     pcall_(function() rsConn:Disconnect() end)
-    pcall_(function() if UIRef.win then UIRef.win.visible = false end end)
-    for _, obj in ipairs_(drawObjs) do pcall_(function() obj:Remove() end) end
+    pcall_(function() if ScreenGui then ScreenGui:Destroy() end end)
     rprint("[SellLemons] Cleanup done")
 end
 
-rprint("sell lemons loaded — FINAL PERFECT BUGFIX (No Locks, Dynamic Color, Instant Stop)")
+rprint("sell lemons loaded — PASTEL CUSTOM UI + AUTO CASH + Q TOGGLE")
