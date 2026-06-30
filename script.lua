@@ -1,4 +1,4 @@
--- [[ Sell Lemons Ultimate - Simple Pastel UI & Auto Cash ]] --
+-- [[ Sell Lemons Ultimate - Luau (Solara/Celery) Bulletproof ]] --
 if _G.MatchaCleanup then pcall(_G.MatchaCleanup) end
 if _G.SellLemonsConnection then
     pcall(function() _G.SellLemonsConnection:Disconnect() end)
@@ -39,7 +39,9 @@ if not camera then camera = workspace.CurrentCamera end
 
 local playerGui = player:WaitForChild("PlayerGui")
 local UserInputService = game:GetService("UserInputService")
-setrobloxinput(true)
+
+-- [크래시 원인 픽스] Luau 인젝터에 없는 해킹 함수 보호 처리
+pcall_(function() setrobloxinput(true) end)
 
 local mouse = nil
 pcall_(function() mouse = player:GetMouse() end)
@@ -57,7 +59,6 @@ local autoStandActive = false
 local myTycoon = nil
 
 -- ==================== UI CREATION (파스텔 하늘색 자체 UI) ====================
--- 기존 UI가 남아있다면 삭제
 local existingUI = playerGui:FindFirstChild("SellLemonsPastelUI")
 if existingUI then existingUI:Destroy() end
 
@@ -202,18 +203,6 @@ local function isBlacklisted(key, v)
     return false
 end
 
-local function anyGivenUpButtons(buttons)
-    for _, v in ipairs_(buttons) do
-        local key = getButtonKey(v)
-        if key then
-            local a = buyAttempt[key]
-            if a and a.inst and a.inst ~= v then buyAttempt[key] = nil
-            elseif a and a.n >= 6 and not isBlacklisted(key, v) then return true end
-        end
-    end
-    return false
-end
-
 -- ==================== COLOR / GREY HELPERS ====================
 local function normalizeColor(c)
     local r, g, b = c.R, c.G, c.B
@@ -257,7 +246,9 @@ local function isDecoration(btn)
     local ok3, color3 = pcall_(function() return btn.Color end)
     if ok3 and color3 then
         local r, g, b = normalizeColor(color3)
-        if r > 150 and g < 70 and b < 70 then return true end
+        if r > 150 and g < 70 and b < 70 then
+            return true
+        end
     end
     
     local ok4, bColor = pcall_(function() return btn.BrickColor.Name end)
@@ -426,14 +417,6 @@ local lemonTrees = {}
 local lemonTreeSet = {}
 local lemonTreeCacheReady = false
 
-local function _removeTree(tree)
-    if not lemonTreeSet[tree] then return end
-    lemonTreeSet[tree] = nil
-    for i = #lemonTrees, 1, -1 do
-        if lemonTrees[i] == tree then table.remove(lemonTrees, i); break end
-    end
-end
-
 local function addLemonTree(tree)
     if not tree or lemonTreeSet[tree] then return end
     lemonTreeSet[tree] = true
@@ -484,8 +467,7 @@ end
 
 local function lsmTouch(v, hrp)
     if not hrp then return false end
-    local vp = v.Position
-    pcall_(function() hrp.CFrame = CF(vp.X, vp.Y, vp.Z) end)
+    pcall_(function() hrp.CFrame = CF(v.Position.X, v.Position.Y, v.Position.Z) end)
     task_wait(0.12)
     if lemonGone(v) then return true end
     return false
@@ -503,4 +485,47 @@ task_spawn(function()
         local hrp = character and character:FindFirstChild("HumanoidRootPart")
         if not hrp or not myTycoon then task_wait(0.05); continue end
 
-        local item
+        local item = nil
+        while queueIndex <= #localQueue do
+            if not autoBuyActive then break end
+            local candidate = localQueue[queueIndex]
+            queueIndex = queueIndex + 1
+            if candidate and candidate.btn and candidate.btn.Parent then
+                local key = candidate.key
+                if buyReady(key, candidate.btn) and not isGreyedOut(candidate.btn) and not isBlacklisted(key, candidate.btn) then
+                    item = candidate; break
+                end
+            end
+        end
+
+        if not item and autoBuyActive then
+            local remaining = #localQueue - queueIndex + 1
+            if remaining <= 0 then
+                local added = appendNewButtons()
+                if added > 0 then
+                    emptyStreak = 0
+                    while queueIndex <= #localQueue do
+                        if not autoBuyActive then break end
+                        local candidate = localQueue[queueIndex]
+                        queueIndex = queueIndex + 1
+                        if candidate and candidate.btn and candidate.btn.Parent then
+                            local key = candidate.key
+                            if buyReady(key, candidate.btn) and not isGreyedOut(candidate.btn) and not isBlacklisted(key, candidate.btn) then
+                                item = candidate; break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if not item and autoBuyActive then
+            local buttons = getButtonsRealTime()
+            local allDead = true
+            
+            for _, v in ipairs_(buttons) do
+                local key = getButtonKey(v)
+                if key then
+                    local a = buyAttempt[key]
+                    if a and a.inst and a.inst ~= v then buyAttempt[key] = nil; a = nil end
+                    if not isBlacklisted(key, v) and not isGreyedOut(v) and not (a and a.n >= 6) then
